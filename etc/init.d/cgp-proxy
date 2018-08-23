@@ -1,0 +1,32 @@
+#!/bin/sh
+# Start/stop rhodecode
+
+PIDFILE=/var/run/cgp-proxy.pid
+
+#. /lib/lsb/init-functions
+
+NAME=cgp-proxy
+RUN_AS=`id -u root`
+
+
+WDIR=/opt/red/conector
+VIRTUALENV_DIR=/opt/red
+case "$1" in 
+  start)
+    echo "Starting Cgp-Proxy"
+    # run application you want to start
+    source $WDIR/bin/activate
+    cd $VIRTUALENV_DIR
+    nohup  python proxy.py > proxy.log &
+    ;;
+  stop)
+    echo "Stopping Cgp-Proxy"
+    kill -9 $(<$VIRTUALENV_DIR/cgp-proxy.pid)
+    ;;
+  *)
+    echo "Usage: /etc/init.d/example{start|stop}"
+    exit 1
+    ;;
+esac
+ 
+exit 0
