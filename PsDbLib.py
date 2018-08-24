@@ -6,7 +6,7 @@ class PsDbLib():
 
 
     def connect(self):
-        conn_string = "host='78.46.26.227' dbname='control' user='voip' password='voip'"
+        conn_string = "host='*.46.26.*' dbname='control' user='voip' password='voip'"
         print "Connecting to database\n ->%s" % (conn_string)
         self.conn = psycopg2.connect(conn_string)
         self.cursor=  self.conn.cursor()
