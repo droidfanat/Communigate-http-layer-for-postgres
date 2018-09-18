@@ -1,0 +1,201 @@
+function getCallBAck(phoneNumber,fromAddress) forward;
+function getGwSettings(gwIndex,phoneNumber) forward;
+function getKeyedSetting(settings, settingName, gwKey) forward;
+function callerLeg(parameters,callPending) external;
+function phoneFormater(preff,phone) forward;
+procedure PSTNSDPFilter(callParams) external;
+var startParameter;
+
+function isPhoneNumber(theAddr) {
+  var firstSymbol = theAddr.subString(0,1);
+  return(IsDigit(firstSymbol) || firstSymbol == "+");
+}
+
+entry Main {
+	
+	Syslog("----------------avtor ERIK.  Cgp and Python --------");
+var debug=true;	
+var sipDomain="sip.desktop.org.ua";
+  //
+  // All calls to gateways must be authenticated
+  //   Request AUTH if there is no AUTH, or reject if AUTH is wrong
+  //
+  var callerEmail = RemoteRedirector(),callIsRedirected;
+  if(callerEmail == null) {callerEmail = RemoteAuthentication();}
+  else                    {callIsRedirected = true;}
+
+  if(callerEmail == null) {RejectCall(401); stop;}
+  
+    var phoneNumber,gwKey,pref,index;
+  if(IsString(startParameter)) {
+    phoneNumber = startParameter;
+  } else {
+    phoneNumber = startParameter[0];
+    index = startParameter[1];
+	phoneNumber = phoneNumber.subString(index.length(),phoneNumber.length()-1);
+  }
+  
+  SysLog("calling '" + phoneNumber + "'...");
+  
+  
+   var callParams      = NewDictionary();
+   
+   
+   
+    // Read caller's Account Settings. If failed -> reject
+  ////////////////////////////////////////////////////////////////////////////////	
+  var callerSettings = GetAccountSettings(null,callerEmail);                    //
+  if(callerSettings == null) {rejectCall("500-Failed to read settings"); stop;} // 
+  ////////////////////////////////////////////////////////////////////////////////
+  
+  /////////////////////Billing-Id////////////////////////////////////////////////
+  var billingId = getKeyedSetting(callerSettings, "PSTNBillingPlan", gwKey);
+  if(billingId == null) {billingId = "";}
+  var billingName = "billingplan" + (billingId != "" ? "-" + billingId : "") + ".objdata";
+  ///////////////////////////////////////////////////////////////////////////////
+  
+  
+  ////////////////////////////from A phone/////////////////////////////////////////////
+   var fromAddress = getKeyedSetting(callerSettings, "PSTNFromName", gwKey);                 
+   if(fromAddress == "*")   {fromAddress = ReadTelnums(callerEmail)[0];}                      
+   elif(fromAddress == "$") {fromAddress = callParams.authUsername;}        
+   if(fromAddress == null || fromAddress == "") {fromAddress = SIPURIToEmail(RemoteURI());} 
+   if(fromAddress.findSubString("@") < 0) {fromAddress += "@" + sipDomain;}
+  /////////////////////////////////////////////////////////////////////////////////////
+  
+  
+  
+  
+  callParams.activeSide       = true;
+  callParams.useMixer         = false;
+  callParams.callBridged      = true;
+  callParams.("Call-ID")      = PendingRequestData("Call-ID") + ".gwout" + String(RandomNumber() % 10000);  // Random is added as some gateways do not accept several calls with the same call-ID, which can happen if a call forks to 2 PSTN calls
+  callParams.("Max-Forwards") = PendingRequestData("Max-Forwards")-1;
+  callParams.impersonate      = callerEmail;
+   
+  
+
+  
+  SysLog("DEBUG: "+ObjectToString(callParams));
+  
+  
+  var data    = getCallBAck(index+phoneNumber,fromAddress);
+  var noSessionTimer = true ;
+  
+  if(IsData(data)) {
+	data = ToObject(data);
+	
+	if(data.Head != "200"){
+	   	rejectCall(data.Head);
+		stop;
+	}
+		
+	
+	SysLog("DEBUG: pref length "+ObjectToString(data.p.length()));  
+   	
+	void(SignalOption("refer","peer"));
+    void(SignalOption("bridgeBreak","disconnect"));
+	var refreshParams = newDictionary();
+	refreshParams.customIdentity = "";              // @2.1: we do not want to send our PAI to PSTN Gateways
+    if(noSessionTimer) { refreshParams.("Session-Expires") = 0; }
+    SetCallParameters(refreshParams);
+	var callerIP  = RemoteIPAddress();
+	callParams.provisionDTMF = true;                // needed for MobilePBX, for example
+  
+
+    
+	
+    var peerLeg;
+	var gw;
+	var connected = false;
+	
+	
+
+	
+	
+	for(var i = 0; i < data.p.length(); i += 1) { 
+	    if(!connected){
+	    SysLog("DEBUG set preffix: "+ObjectToString( data.p[i]));
+	    gw = ToObject(getGwSettings(data.p[i],ObjectToString(phoneNumber)));
+	    fromAddress=data.a[i];
+		SysLog("DEBUG get Gw Settings: "+ObjectToString(gw));
+	    
+		callParams.authUsername = gw.name;
+	    callParams.authPassword="";
+	    callParams.Via = gw.gateway;
+		fromAddress += "@" + sipDomain;
+		callParams.("P-Billing-Id") = gw.gateway;
+		callParams.("") = "sip:"+ gw.phoneNumber + "@" + sipDomain;
+	    callParams.From = EmailToSIPURI(fromAddress);
+	
+	   
+       PSTNSDPFilter(callParams);
+  
+       peerLeg  = callerLeg(callParams,true);	
+	                  if(!IsTask(peerLeg)) 
+					     {
+							 	    
+                         }
+		
+		
+	                  while(IsConnected()) {connected=true;}
+		      if(connected==false and data.p.length()-1==i ){
+				  rejectCall(peerLeg); stop;  
+			  }
+         			
+		}else{
+		  
+          if(IsConnected()) {Disconnect(); }
+		  
+		}
+	 
+	}
+    		
+ }
+   
+  
+}
+
+
+
+
+
+function getKeyedSetting(settings, settingName, gwKey) {
+  if(settings == null) {return(null);}
+  setting = settings.(settingName);
+  if(IsString(setting) && setting.subString(0,1) == "{" && setting.subString(-1,1) == "}") {
+    setting = TextToObject(setting);
+  }
+
+  if(IsDictionary(setting)) {setting = setting.(gwKey != null ? gwKey : setting[0]);}
+
+  return(IsString(setting) && setting != "" ? setting : null);
+}
+
+
+function phoneFormater(preff,phone){
+  var lPrefix;
+  var replace=0;
+  for(lPrefix = 0; lPrefix < preff.length() ; lPrefix += 1) {	if (phone[lPrefix]=="+"){replace += 1;}	 }
+  
+  return(preff.substring(replace,1000)+phone.substring(replace,1000));
+	
+}
+
+
+function getGwSettings(gwIndex,phoneNumber) {	 
+  var callerIP  = RemoteIPAddress();
+  var regUserResponse = HTTPCall("http://127.0.0.1/index?fn=check_route&index="+gwIndex+"&phoneNumber="+phoneNumber,NewDictionary());
+  SysLog("DEBUG: "+regUserResponse.body);
+  return(regUserResponse.body); 	  
+  }
+
+function getCallBAck(phoneNumber,fromAddress) {	 
+  var callerIP  = RemoteIPAddress();
+  var regUserResponse = HTTPCall("http://127.0.0.1/index?fn=check_call&u="+EmailUserPart(RemoteAuthentication())+"&ipa=1&b="+phoneNumber+"&ipb=1"+"&fromAddress="+fromAddress,NewDictionary());
+  SysLog("DEBUG: "+regUserResponse.body);
+  return(regUserResponse.body); 	  
+  }
+
+
+
